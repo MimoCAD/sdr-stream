@@ -98,7 +98,7 @@ impl DmrVoice {
         out
     }
 
-    /// Unpack back to the 72 bits `dsp::dmr::voice_frame_dibits` takes.
+    /// Unpack back to the 72 bits `p25::ambe::voice_frame_dibits` takes.
     pub fn unpack_frame(octets: &[u8; FRAME_OCTETS]) -> [u8; 72] {
         let mut out = [0u8; 72];
         for (i, b) in out.iter_mut().enumerate() {
@@ -365,6 +365,77 @@ pub fn parse_dmr(r: &Raw) -> Option<DmrRecord> {
         TYP_DMR_ALIAS => DmrRecord::Alias(DmrAlias::from_raw(r)?),
         _ => return None,
     })
+}
+
+/// (Moved here from `dsp::dmr` 2026-09-07: a record's meaning belongs
+/// with its layout, so a reader of a [`DmrLc`] record needs no
+/// signal-processing crate to name the talker.)
+/// What a Full LC payload MEANS, for the standard-feature FLCOs (Full
+/// Link Control Opcodes) of TS 102 361-2 Table B.1. Applies to the
+/// header/terminator LC and the embedded LC alike — same nine octets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LcInfo {
+    /// FLCO 000000 — who is talking to which talkgroup (table 7.1).
+    GroupVoice { tg: u32, src: u32 },
+    /// FLCO 000011 — unit-to-unit call (table 7.2).
+    UnitVoice { dst: u32, src: u32 },
+    /// FLCO 001000 — inband position (table 7.3): 3-bit error bucket
+    /// (7 = no fix), then microdegrees so `no_std` needs no floats —
+    /// longitude in steps of 360/2²⁵ °, latitude 180/2²⁴ °, both
+    /// two's complement (§7.2.16/17).
+    GpsInfo { err: u8, lon_udeg: i64, lat_udeg: i64 },
+    /// FLCO 000100 — Talker Alias header (table 7.4): data format
+    /// (Table 7.25: 0 = 7-bit ASCII, 1 = ISO 8-bit, 2 = UTF-8,
+    /// 3 = UTF-16BE), total length in code units, and the header's
+    /// 48 octet-aligned data bits (the 49th, its MSB, is reserved for
+    /// the 8/16-bit formats).
+    TalkerAliasHeader { format: u8, len: u8, data: [u8; 6] },
+    /// FLCO 000101..000111 — Talker Alias blocks 1..3 (table 7.5),
+    /// seven more octets of alias each.
+    TalkerAliasBlock { n: u8, data: [u8; 7] },
+    /// Any other FLCO/FID combination — the bytes are the caller's to
+    /// interpret.
+    Other,
+}
+
+/// Interpret nine RS- or checksum-verified LC octets per TS 102 361-2.
+/// Only standard-feature messages (FID 0) are named; a manufacturer
+/// FID is `Other` — the CRC may vouch for the bits, not the layout.
+pub fn lc_info(lc: &[u8; 9]) -> LcInfo {
+    let a = |i: usize| u32::from(lc[i]) << 16 | u32::from(lc[i + 1]) << 8 | u32::from(lc[i + 2]);
+    if lc[1] != 0 {
+        return LcInfo::Other;
+    }
+    match lc[0] & 0x3F {
+        0b000000 => LcInfo::GroupVoice { tg: a(3), src: a(6) },
+        0b000011 => LcInfo::UnitVoice { dst: a(3), src: a(6) },
+        0b001000 => {
+            // reserved(4) · err(3) · lon(25) · lat(24) across the 56
+            // payload bits of octets 2..9.
+            let bits: u64 = lc[2..9].iter().fold(0, |acc, &b| acc << 8 | u64::from(b));
+            let err = (bits >> 49 & 0x7) as u8;
+            let lon_raw = (bits >> 24 & 0x1FF_FFFF) as i64;
+            let lat_raw = (bits & 0xFF_FFFF) as i64;
+            let lon = if lon_raw >= 1 << 24 { lon_raw - (1 << 25) } else { lon_raw };
+            let lat = if lat_raw >= 1 << 23 { lat_raw - (1 << 24) } else { lat_raw };
+            LcInfo::GpsInfo {
+                err,
+                lon_udeg: lon * 360_000_000 >> 25,
+                lat_udeg: lat * 180_000_000 >> 24,
+            }
+        }
+        0b000100 => {
+            let mut data = [0u8; 6];
+            data.copy_from_slice(&lc[3..9]);
+            LcInfo::TalkerAliasHeader { format: lc[2] >> 6, len: lc[2] >> 1 & 0x1F, data }
+        }
+        op @ 0b000101..=0b000111 => {
+            let mut data = [0u8; 7];
+            data.copy_from_slice(&lc[2..9]);
+            LcInfo::TalkerAliasBlock { n: op as u8 - 0b000100, data }
+        }
+        _ => LcInfo::Other,
+    }
 }
 
 #[cfg(test)]

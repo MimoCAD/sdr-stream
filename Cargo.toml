@@ -1,7 +1,10 @@
 [package]
 name = "sdr-stream"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/MimoCAD/sdr-stream"
+description = "DigitalStream — the .sdr call container: framing, the P25 and DMR record layouts, the sidecar document, the filename grammar, RIFF and JSON — no_std, zero dependencies."
 # DigitalStream — the record container that is the `.sdr` archive file,
 # the WebSocket binary message, and the WebRTC datagram at once. Lifted
 # out of crates/p25 (2026-09-06, operator ruling: the archive now holds

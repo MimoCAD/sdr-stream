@@ -1,0 +1,25 @@
+[package]
+name = "sdr-stream"
+version = "1.0.0"
+edition = "2024"
+# DigitalStream — the record container that is the `.sdr` archive file,
+# the WebSocket binary message, and the WebRTC datagram at once. Lifted
+# out of crates/p25 (2026-09-06, operator ruling: the archive now holds
+# more than one digital mode, so the framing belongs to no codec). This
+# crate owns the framing and the mode-neutral records; each codec crate
+# defines its own record bodies on top (p25: LDU / Phase 2 VCH; DMR's
+# ride here as plain byte layouts because no codec crate owns them).
+
+[lib]
+name = "stream"
+doctest = false
+
+# ZERO dependencies, permanently: a wire format needs nothing but bytes,
+# and the wasm player re-parses every record with this crate.
+[dependencies]
+
+[features]
+default = ["std"]
+# `std` is on for native/test builds; wasm builds --no-default-features
+# to be no_std + alloc, matching crates/p25 and crates/fec.
+std = []

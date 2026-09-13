@@ -10,9 +10,13 @@
 //!  32  2    slot_valid   bit i = voice slot i carried a Golay-valid frame
 //!  34  9    errors       per-slot Golay correction count (0xFF = invalid)
 //!  43  1    pad
-//!  44  194  body         the corrected on-air LDU body, dibits packed
-//!                        4 per octet MSB-first (776 dibits)
-//! 238  2    pad
+//!  44  196  body         the corrected on-air LDU body, dibits packed
+//!                        4 per octet MSB-first (784 dibits). Records
+//!                        written before 2026-09-12 carry 194 octets
+//!                        (776 dibits — the LSD laid out as 8 dibits, so
+//!                        voice slot 8 was misaligned) and two pad zeros
+//!                        where the last 8 dibits now live: same record
+//!                        size, slot 8 of those files is garbage either way.
 //!
 //! P2Vch (typ 5), 696 octets:
 //!  32  1    slot         the LCH (0/1)
@@ -37,13 +41,13 @@ pub struct LduFrame {
     pub head: MsgHead,
     pub slot_valid: u16,
     pub errors: [u8; 9],
-    pub body: [u8; 194],
+    pub body: [u8; 196],
 }
 
 impl LduFrame {
     /// Wire size of every Ldu record.
     pub const BYTES: usize = 240;
-    pub const BODY_OCTETS: usize = 194;
+    pub const BODY_OCTETS: usize = 196;
 
     pub fn encode_into(&self, out: &mut Vec<u8>) {
         let base = out.len();
@@ -63,8 +67,8 @@ impl LduFrame {
         }
         let mut errors = [0u8; 9];
         errors.copy_from_slice(&b[B + 2..B + 11]);
-        let mut body = [0u8; 194];
-        body.copy_from_slice(&b[B + 12..B + 12 + 194]);
+        let mut body = [0u8; 196];
+        body.copy_from_slice(&b[B + 12..B + 12 + 196]);
         Some(LduFrame { head, slot_valid: u16le(b, B), errors, body })
     }
 
@@ -146,7 +150,7 @@ mod tests {
 
     #[test]
     fn ldu_layout_pinned() {
-        let mut body = [0u8; 194];
+        let mut body = [0u8; 196];
         for (i, b) in body.iter_mut().enumerate() {
             *b = (i % 251) as u8;
         }
@@ -163,8 +167,7 @@ mod tests {
         assert_eq!(u16le(&out, 32), 0x1EF);
         assert_eq!(&out[34..43], &f.errors);
         assert_eq!(out[43], 0);
-        assert_eq!(&out[44..238], &body[..]);
-        assert_eq!(&out[238..240], &[0, 0]);
+        assert_eq!(&out[44..240], &body[..]);
         let back = LduFrame::from_raw(&raw(&out)).unwrap();
         assert_eq!(back, f);
         assert!(!back.ldu1() && back.extra_rs_ok());

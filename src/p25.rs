@@ -1,9 +1,9 @@
-//! P25 record body LAYOUTS: the Phase 1 LDU (typ 2) and the Phase 2
+//! P25 record body LAYOUTS: the Phase 1 LDU (Logical link Data Unit) (typ 2) and the Phase 2
 //! VCH superframe (typ 5). This module is bytes only — what the
 //! receiver writes and any reader parses without a vocoder. The
 //! conversions between these layouts and the live decode (`fec::
 //! DecodedLdu`, `phase2_vch::VchSuperframe`) live in the p25 codec
-//! crate, which is the only place a Golay or an IMBE decoder exists.
+//! crate, which is the only place a Golay or an IMBE (Improved Multi-Band Excitation) decoder exists.
 //!
 //! ```text
 //! Ldu (typ 2), 240 octets:
@@ -13,7 +13,7 @@
 //!  44  196  body         the corrected on-air LDU body, dibits packed
 //!                        4 per octet MSB-first (784 dibits). Records
 //!                        written before 2026-09-12 carry 194 octets
-//!                        (776 dibits — the LSD laid out as 8 dibits, so
+//!                        (776 dibits — the LSD (Low Speed Data) laid out as 8 dibits, so
 //!                        voice slot 8 was misaligned) and two pad zeros
 //!                        where the last 8 dibits now live: same record
 //!                        size, slot 8 of those files is garbage either way.

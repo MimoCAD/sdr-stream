@@ -198,7 +198,7 @@ impl Parser<'_> {
                     });
                 }
                 // ASCII content only, as documented.
-                c if c < 0x80 => s.push(c as char),
+                c if c.is_ascii() => s.push(c as char),
                 _ => return None,
             }
         }

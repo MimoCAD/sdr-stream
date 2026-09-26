@@ -14,8 +14,7 @@
 //! this crate has ZERO dependencies, builds `no_std` + `alloc`, and owns
 //! every layout the receiver writes.
 //!
-//! Framing follows the `trudp` convention with its proven forward-
-//! compatibility rules: `len` is AUTHORITATIVE (readers advance `len`
+//! Framing rules, forward-compatible by construction: `len` is AUTHORITATIVE (readers advance `len`
 //! with no per-type knowledge), tail bytes beyond a known layout are
 //! ignored, unknown `typ`s are skipped whole. Every record opens with
 //! the magic and repeats hz/nac/epoch, so any record is understandable
@@ -789,7 +788,7 @@ mod tests {
     }
 
     /// What is refused: the v0 magic, a foreign version, a misaligned
-    /// length, and the `MC` referee packet.
+    /// length, and a foreign magic (`MC`).
     #[test]
     fn foreign_heads_rejected() {
         let e = EssRecord { head: head(), ess: [1; 12] };

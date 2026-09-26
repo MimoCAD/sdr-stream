@@ -367,6 +367,25 @@ pub fn parse_dmr(r: &Raw) -> Option<DmrRecord> {
     })
 }
 
+/// The standard feature set's Feature set ID (FID, octet 1 of a Full LC):
+/// a manufacturer FID names its own opcode space.
+pub const FID_STANDARD: u8 = 0x00;
+/// Octet 0 of a Full LC: PF, reserved, then the 6-bit FLCO.
+pub const FLCO_BITS: u8 = 0x3F;
+/// The Service Options' Privacy bit (TS 102 361-2 Table 7.11).
+pub const SERVICE_OPTIONS_PRIVACY: u8 = 0x40;
+
+/// The standard-feature Full Link Control Opcodes this crate reads (TS
+/// 102 361-2 Table B.1).
+pub mod flco {
+    pub const GROUP_VOICE_CHANNEL_USER: u8 = 0b000000;
+    pub const UNIT_TO_UNIT_VOICE_CHANNEL_USER: u8 = 0b000011;
+    pub const TALKER_ALIAS_HEADER: u8 = 0b000100;
+    pub const TALKER_ALIAS_BLOCK_1: u8 = 0b000101;
+    pub const TALKER_ALIAS_BLOCK_3: u8 = 0b000111;
+    pub const GPS_INFO: u8 = 0b001000;
+}
+
 /// (Moved here from `dsp::dmr` 2026-09-07: a record's meaning belongs
 /// with its layout, so a reader of a [`DmrLc`] record needs no
 /// signal-processing crate to name the talker.)
@@ -403,13 +422,13 @@ pub enum LcInfo {
 /// FID is `Other` — the CRC may vouch for the bits, not the layout.
 pub fn lc_info(lc: &[u8; 9]) -> LcInfo {
     let a = |i: usize| u32::from(lc[i]) << 16 | u32::from(lc[i + 1]) << 8 | u32::from(lc[i + 2]);
-    if lc[1] != 0 {
+    if lc[1] != FID_STANDARD {
         return LcInfo::Other;
     }
-    match lc[0] & 0x3F {
-        0b000000 => LcInfo::GroupVoice { tg: a(3), src: a(6) },
-        0b000011 => LcInfo::UnitVoice { dst: a(3), src: a(6) },
-        0b001000 => {
+    match lc[0] & FLCO_BITS {
+        flco::GROUP_VOICE_CHANNEL_USER => LcInfo::GroupVoice { tg: a(3), src: a(6) },
+        flco::UNIT_TO_UNIT_VOICE_CHANNEL_USER => LcInfo::UnitVoice { dst: a(3), src: a(6) },
+        flco::GPS_INFO => {
             // reserved(4) · err(3) · lon(25) · lat(24) across the 56
             // payload bits of octets 2..9.
             let bits: u64 = lc[2..9].iter().fold(0, |acc, &b| acc << 8 | u64::from(b));
@@ -424,15 +443,15 @@ pub fn lc_info(lc: &[u8; 9]) -> LcInfo {
                 lat_udeg: lat * 180_000_000 >> 24,
             }
         }
-        0b000100 => {
+        flco::TALKER_ALIAS_HEADER => {
             let mut data = [0u8; 6];
             data.copy_from_slice(&lc[3..9]);
             LcInfo::TalkerAliasHeader { format: lc[2] >> 6, len: lc[2] >> 1 & 0x1F, data }
         }
-        op @ 0b000101..=0b000111 => {
+        op @ flco::TALKER_ALIAS_BLOCK_1..=flco::TALKER_ALIAS_BLOCK_3 => {
             let mut data = [0u8; 7];
             data.copy_from_slice(&lc[2..9]);
-            LcInfo::TalkerAliasBlock { n: op as u8 - 0b000100, data }
+            LcInfo::TalkerAliasBlock { n: op - flco::TALKER_ALIAS_HEADER, data }
         }
         _ => LcInfo::Other,
     }

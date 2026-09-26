@@ -45,6 +45,9 @@ pub struct LduFrame {
 }
 
 impl LduFrame {
+    /// An `errors` entry for a slot that did not decode (no count).
+    pub const SLOT_INVALID: u8 = 0xFF;
+
     /// Wire size of every Ldu record.
     pub const BYTES: usize = 240;
     pub const BODY_OCTETS: usize = 196;
@@ -94,6 +97,9 @@ pub struct P2VchFrame {
 }
 
 impl P2VchFrame {
+    /// `frame_valid` with all 18 voice frames of the superframe present.
+    pub const ALL_FRAMES_VALID: u32 = (1 << 18) - 1;
+
     /// Wire size of every P2 VCH record.
     pub const BYTES: usize = 696;
 

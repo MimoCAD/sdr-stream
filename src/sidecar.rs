@@ -71,7 +71,7 @@ fn json_escape(s: &str) -> String {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if c < ' ' => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
         }
     }

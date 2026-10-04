@@ -38,7 +38,12 @@
 //! `head.flags` that superframe's P2V_FLAG_DESCRAMBLED; `head.epoch_us`
 //! is the burst's own air time.
 //!  32  1    slot         the LCH (0/1)
-//!  33  1    first        the first frame's place in the superframe (0..17)
+//!  33  1    first        the first frame's place in the superframe (0..17),
+//!                        or UNPLACED (0xFF, sdr-stream 1.9.0): a call's
+//!                        first 4V bursts, sent the moment they arrive —
+//!                        before the 2V names their places — to be played
+//!                        in arrival order; the same burst follows placed
+//!                        (same `epoch_us`) once the 2V files it
 //!  34  1    count        frames carried: 4 (a 4V) or 2 (the 2V)
 //!  35  1    pad
 //!  36  144  phase        `count` frames × 36 symbols, the measured phase
@@ -174,6 +179,8 @@ impl P2VoiceBurst {
     pub const BYTES: usize = 184;
     /// The most frames one burst carries (a 4V).
     pub const MAX_FRAMES: usize = 4;
+    /// `first` of a burst sent before its place was known.
+    pub const UNPLACED: u8 = 0xFF;
 
     pub fn encode_into(&self, out: &mut Vec<u8>) {
         let base = out.len();
@@ -193,7 +200,7 @@ impl P2VoiceBurst {
             return None;
         }
         let (first, n) = (b[B + 1], b[B + 2] as usize);
-        if n == 0 || n > Self::MAX_FRAMES || first as usize + n > 18 {
+        if n == 0 || n > Self::MAX_FRAMES || (first != Self::UNPLACED && first as usize + n > 18) {
             return None;
         }
         let phase = (0..n)
@@ -207,9 +214,13 @@ impl P2VoiceBurst {
     }
 
     /// The first frame's place in the call: its superframe's seq × 18 +
-    /// its place in the superframe.
-    pub fn position(&self) -> u64 {
-        self.head.seq as u64 * 18 + self.first as u64
+    /// its place in the superframe (`None` for an unplaced burst).
+    pub fn position(&self) -> Option<u64> {
+        (!self.unplaced()).then(|| self.head.seq as u64 * 18 + self.first as u64)
+    }
+
+    pub fn unplaced(&self) -> bool {
+        self.first == Self::UNPLACED
     }
 }
 
@@ -348,10 +359,14 @@ mod tests {
         assert!(out[108..].iter().all(|&b| b == 0));
         let back = P2VoiceBurst::from_raw(&raw(&out)).unwrap();
         assert_eq!(back, f);
-        assert_eq!(back.position(), 9 * 18 + 16);
+        assert_eq!(back.position(), Some(9 * 18 + 16));
         // A burst running past the superframe's 18 frames never parses.
         out[33] = 17;
         assert!(P2VoiceBurst::from_raw(&raw(&out)).is_none());
+        // An unplaced one does, and has no position.
+        out[33] = P2VoiceBurst::UNPLACED;
+        let u = P2VoiceBurst::from_raw(&raw(&out)).unwrap();
+        assert!(u.unplaced() && u.position().is_none());
     }
 
     #[test]

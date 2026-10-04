@@ -43,8 +43,8 @@
 //! ```
 //!
 //! - `typ` — 1 CallHeader · 2 Ldu (P25 Phase 1, [`p25`]) · 3 CallTrailer
-//!   · 4 Ess · 5 P2Vch (P25 Phase 2, [`p25`]) · 6..=10 DMR ([`dmr`]);
-//!   others reserved.
+//!   · 4 Ess · 5 P2Vch (P25 Phase 2, [`p25`]) · 6..=10 DMR ([`dmr`])
+//!   · 11..=14 the P25 control channel feed ([`cc`]); others reserved.
 //! - `ver` — 1. A reader refuses any other value the way it refuses a
 //!   cut: the format before this one (magic `MS`, a 24-octet head, a
 //!   one-octet `len/4`) was v0 and was never deployed; there is no v0
@@ -66,6 +66,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+pub mod cc;
 pub mod dmr;
 pub mod json;
 pub mod name;
@@ -100,6 +101,14 @@ pub const TYP_DMR_LC: u8 = 7;
 pub const TYP_DMR_PACKET: u8 = 8;
 pub const TYP_DMR_FIX: u8 = 9;
 pub const TYP_DMR_ALIAS: u8 = 10;
+pub const TYP_CC_SITE: u8 = 11;
+pub const TYP_CC_TSBK: u8 = 12;
+pub const TYP_CC_MBT: u8 = 13;
+pub const TYP_CC_MAC: u8 = 14;
+
+// Control channel feed flags (bodies in [`cc`]).
+/// Tsbk / Mbt: heard on an uplink — an inbound packet, not an outbound one.
+pub const CC_FLAG_INBOUND: u16 = 1 << 0;
 
 // CallHeader flags.
 /// A sibling `.wav` exists (dual-write acceptance mode).

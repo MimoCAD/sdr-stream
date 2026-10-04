@@ -18,6 +18,19 @@
 //!                        where the last 8 dibits now live: same record
 //!                        size, slot 8 of those files is garbage either way.
 //!
+//! P1Voice (typ 16), 56 octets — one voice frame of an LDU, sent on the
+//! live feed the moment its 72 dibits are in (2026-10-04), so a listener
+//! waits 20 ms for a frame instead of 180 ms for its LDU. `head.seq` is
+//! its LDU's (the Ldu record's) seq and `head.flags` carries that LDU's
+//! LDU_FLAG_LDU2; `head.epoch_us` is the frame's own first symbol.
+//!  32  1    slot         the voice slot in its LDU (0..8)
+//!  33  1    errors       Golay+Hamming corrections (0xFF = invalid)
+//!  34  2    pad
+//!  36  18   dibits       the corrected on-air voice frame, 72 dibits
+//!                        packed 4 per octet MSB-first (the Ldu body's
+//!                        packing)
+//!  54  2    pad
+//!
 //! P2Vch (typ 5), 696 octets:
 //!  32  1    slot         the LCH (0/1)
 //!  33  3    pad
@@ -29,7 +42,8 @@
 //! 691  5    pad
 //! ```
 use crate::{
-    HEAD_BYTES, LDU_FLAG_LDU2, LDU_FLAG_RS_OK, MsgHead, Raw, TYP_LDU, TYP_P2_VCH, pad_to, push_head, u16le, u32le,
+    HEAD_BYTES, LDU_FLAG_LDU2, LDU_FLAG_RS_OK, MsgHead, Raw, TYP_LDU, TYP_P1_VOICE, TYP_P2_VCH, pad_to, push_head, u16le,
+    u32le,
 };
 use alloc::vec::Vec;
 
@@ -81,6 +95,53 @@ impl LduFrame {
 
     pub fn extra_rs_ok(&self) -> bool {
         self.head.flags & LDU_FLAG_RS_OK != 0
+    }
+}
+
+/// One voice frame of a P25 Phase 1 LDU, on its own (the live feed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct P1VoiceFrame {
+    pub head: MsgHead,
+    pub slot: u8,
+    pub errors: u8,
+    pub dibits: [u8; 18],
+}
+
+impl P1VoiceFrame {
+    /// An `errors` value for a frame that did not decode.
+    pub const INVALID: u8 = 0xFF;
+
+    /// Wire size of every P1Voice record.
+    pub const BYTES: usize = 56;
+
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        let base = out.len();
+        push_head(out, TYP_P1_VOICE, Self::BYTES, &self.head);
+        out.push(self.slot);
+        out.push(self.errors);
+        out.extend_from_slice(&[0; 2]);
+        out.extend_from_slice(&self.dibits);
+        pad_to(out, base + Self::BYTES);
+    }
+
+    pub fn from_raw(r: &Raw) -> Option<P1VoiceFrame> {
+        const B: usize = HEAD_BYTES;
+        let (b, head) = (&r.bytes[..], r.head);
+        if r.typ != TYP_P1_VOICE || b.len() < Self::BYTES || b[B] > 8 {
+            return None;
+        }
+        let mut dibits = [0u8; 18];
+        dibits.copy_from_slice(&b[B + 4..B + 22]);
+        Some(P1VoiceFrame { head, slot: b[B], errors: b[B + 1], dibits })
+    }
+
+    pub fn ldu1(&self) -> bool {
+        self.head.flags & LDU_FLAG_LDU2 == 0
+    }
+
+    /// The frame's place in the call: its LDU's seq × 9 + its slot.
+    pub fn position(&self) -> u64 {
+        self.head.seq as u64 * 9 + self.slot as u64
     }
 }
 
@@ -177,6 +238,31 @@ mod tests {
         let back = LduFrame::from_raw(&raw(&out)).unwrap();
         assert_eq!(back, f);
         assert!(!back.ldu1() && back.extra_rs_ok());
+    }
+
+    #[test]
+    fn p1_voice_layout_pinned() {
+        let mut dibits = [0u8; 18];
+        for (i, b) in dibits.iter_mut().enumerate() {
+            *b = 0xA0 + i as u8;
+        }
+        let f = P1VoiceFrame { head: MsgHead { seq: 41, flags: LDU_FLAG_LDU2, ..head() }, slot: 8, errors: 3, dibits };
+        let mut out = Vec::new();
+        f.encode_into(&mut out);
+        assert_eq!(out.len(), P1VoiceFrame::BYTES);
+        assert_eq!(out[5], TYP_P1_VOICE);
+        assert_eq!(u16le(&out, 6), 56);
+        assert_eq!((out[32], out[33]), (8, 3));
+        assert_eq!(&out[34..36], &[0, 0]);
+        assert_eq!(&out[36..54], &dibits[..]);
+        assert_eq!(&out[54..56], &[0, 0]);
+        let back = P1VoiceFrame::from_raw(&raw(&out)).unwrap();
+        assert_eq!(back, f);
+        assert!(!back.ldu1());
+        assert_eq!(back.position(), 41 * 9 + 8);
+        // A slot past the LDU's nine never parses.
+        out[32] = 9;
+        assert!(P1VoiceFrame::from_raw(&raw(&out)).is_none());
     }
 
     #[test]

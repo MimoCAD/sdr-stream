@@ -106,6 +106,7 @@ pub const TYP_CC_TSBK: u8 = 12;
 pub const TYP_CC_MBT: u8 = 13;
 pub const TYP_CC_MAC: u8 = 14;
 pub const TYP_CC_CALL: u8 = 15;
+pub const TYP_P1_VOICE: u8 = 16;
 
 // Control channel feed flags (bodies in [`cc`]).
 /// Tsbk / Mbt: heard on an uplink — an inbound packet, not an outbound one.
@@ -142,6 +143,11 @@ pub const LDU_FLAG_FORCED: u16 = 1 << 2;
 /// when clear, the extra inside `body` is untrusted even though its
 /// re-encoded parity checks out.
 pub const LDU_FLAG_RS_OK: u16 = 1 << 3;
+/// Live feed only (2026-10-04): this LDU's voice already left, frame by
+/// frame, as [`p25::P1VoiceFrame`] records — a live reader takes its Link
+/// Control / Encryption Sync and renders no voice from it. Never in an
+/// archive (the recorder clears it before filing the record).
+pub const LDU_FLAG_LIVE: u16 = 1 << 4;
 
 // CallTrailer flags.
 pub const TRL_FLAG_ENCRYPTED: u16 = 1 << 0;

@@ -5,11 +5,18 @@
 //! (TIA-102.AABC-E opcodes, TIA-102.BAAA-B data blocks) on whichever
 //! side holds them.
 //!
-//! A feed DATAGRAM is records only, in this order:
+//! A feed DATAGRAM is records only, in one of two orders:
 //!
 //! ```text
-//! [Site] [Tsbk | Mbt]* [Mac]
+//! [Site] [Tsbk | Mbt]* [Mac]                 control channel
+//! [Call] [Ldu | P2Vch]* [Mac]                live voice of one call
 //! ```
+//!
+//! - [`CallRecord`] names the call the way a P25 radio knows it — WACN,
+//!   SYSID, talkgroup, the talker — so a server can hand the voice to the
+//!   clients affiliated with that talkgroup without reading the voice.
+//!   The voice records behind it are the archive's own (`p25::LduFrame`,
+//!   `p25::P2VchFrame`), sent the moment the receiver decodes each.
 //!
 //! - [`SiteRecord`] names the P25 site exactly as the site names itself
 //!   on the air — WACN and SYSID from the Network Status Broadcast, RFSS
@@ -53,6 +60,19 @@
 //!
 //! Mac (typ 14), 64 octets:
 //!  32  32  tag    HMAC-SHA256(site key, the datagram before this record)
+//!
+//! Call (typ 15), 56 octets:
+//!  32  4  wacn
+//!  36  2  sysid
+//!  38  1  mode    `Mode` (P25 FDMA / TDMA)
+//!  39  1  slot    the TDMA slot, 0xFF for FDMA
+//!  40  4  tg      the talkgroup
+//!  44  4  src     the talker (0 until named)
+//!  48  4  call    the receiver's call ordinal (a keyup's stream)
+//!  52  4  source  the receiver's sender lane (the replay guard's key)
+//!  head: hz = the voice channel, seq = the lane's datagram ordinal,
+//!  epoch_us = sent, site = the receiver's MimoCAD SITE_ID, flags =
+//!  CALL_FLAG_* (END on the call's last datagram).
 //! ```
 //!
 //! Tsbk and Mbt set [`CC_FLAG_INBOUND`] when the blocks were heard on
@@ -60,8 +80,8 @@
 //! packet); their head's `hz` is the frequency they were heard on and
 //! `seq` the block ordinal on that frequency, so a gap shows loss.
 use crate::{
-    CC_FLAG_INBOUND, HEAD_BYTES, MsgHead, RECORD_ALIGN, Raw, TYP_CC_MAC, TYP_CC_MBT, TYP_CC_SITE, TYP_CC_TSBK, pad8,
-    pad_to, parse_head, push_head, u16le, u32le,
+    CALL_FLAG_END, CC_FLAG_INBOUND, HEAD_BYTES, MsgHead, RECORD_ALIGN, Raw, TYP_CC_CALL, TYP_CC_MAC, TYP_CC_MBT,
+    TYP_CC_SITE, TYP_CC_TSBK, pad8, pad_to, parse_head, push_head, u16le, u32le,
 };
 use alloc::vec::Vec;
 
@@ -238,10 +258,77 @@ impl MacRecord {
     }
 }
 
+/// The live voice of one call: who it is, as a P25 radio knows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallRecord {
+    pub head: MsgHead,
+    pub wacn: u32,
+    pub sysid: u16,
+    /// [`crate::Mode`] as its wire value.
+    pub mode: u8,
+    /// The TDMA slot; [`CallRecord::NO_SLOT`] for FDMA.
+    pub slot: u8,
+    pub tg: u32,
+    pub src: u32,
+    pub call: u32,
+    pub source: u32,
+}
+
+impl CallRecord {
+    pub const BYTES: usize = 56;
+    pub const NO_SLOT: u8 = 0xFF;
+
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        let base = out.len();
+        push_head(out, TYP_CC_CALL, Self::BYTES, &self.head);
+        out.extend_from_slice(&self.wacn.to_le_bytes());
+        out.extend_from_slice(&self.sysid.to_le_bytes());
+        out.push(self.mode);
+        out.push(self.slot);
+        out.extend_from_slice(&self.tg.to_le_bytes());
+        out.extend_from_slice(&self.src.to_le_bytes());
+        out.extend_from_slice(&self.call.to_le_bytes());
+        out.extend_from_slice(&self.source.to_le_bytes());
+        pad_to(out, base + Self::BYTES);
+    }
+
+    pub fn from_raw(r: &Raw) -> Option<CallRecord> {
+        const B: usize = HEAD_BYTES;
+        let b = &r.bytes[..];
+        if r.typ != TYP_CC_CALL || b.len() < Self::BYTES {
+            return None;
+        }
+        Some(CallRecord {
+            head: r.head,
+            wacn: u32le(b, B),
+            sysid: u16le(b, B + 4),
+            mode: b[B + 6],
+            slot: b[B + 7],
+            tg: u32le(b, B + 8),
+            src: u32le(b, B + 12),
+            call: u32le(b, B + 16),
+            source: u32le(b, B + 20),
+        })
+    }
+
+    /// The call's last datagram.
+    pub fn end(&self) -> bool {
+        self.head.flags & CALL_FLAG_END != 0
+    }
+}
+
+/// The Call record a voice datagram (signed or forwarded) opens with.
+pub fn call_of(datagram: &[u8]) -> Option<CallRecord> {
+    match crate::parse(datagram)?.0 {
+        crate::Record::Raw(r) => CallRecord::from_raw(&r),
+        _ => None,
+    }
+}
+
 /// A feed datagram cut into what was signed and the tag over it: the
 /// last [`MacRecord::BYTES`] octets must be a Mac record, and what
-/// precedes it must open with a Site record. `None` for anything else
-/// — the server drops it unread.
+/// precedes it must open with a Site record (control channel) or a Call
+/// record (voice). `None` for anything else — the server drops it unread.
 pub fn split_signed(datagram: &[u8]) -> Option<(&[u8], [u8; 32])> {
     let cut = datagram.len().checked_sub(MacRecord::BYTES)?;
     if cut < SiteRecord::BYTES || cut % RECORD_ALIGN != 0 {
@@ -252,9 +339,9 @@ pub fn split_signed(datagram: &[u8]) -> Option<(&[u8], [u8; 32])> {
     if typ != TYP_CC_MAC || len != MacRecord::BYTES {
         return None;
     }
-    let (typ, _, len) = parse_head(signed)?;
-    if typ != TYP_CC_SITE || len != SiteRecord::BYTES {
-        return None;
+    match parse_head(signed)? {
+        (TYP_CC_SITE, _, SiteRecord::BYTES) | (TYP_CC_CALL, _, CallRecord::BYTES) => {}
+        _ => return None,
     }
     let mut tag = [0u8; 32];
     tag.copy_from_slice(&mac[HEAD_BYTES..]);
@@ -385,5 +472,37 @@ mod tests {
         assert!(split_signed(&d[SiteRecord::BYTES..]).is_none());
         assert!(split_signed(&d[..d.len() - 8]).is_none());
         assert!(split_signed(&[]).is_none());
+    }
+
+    /// A voice datagram: Call, a voice record, Mac — split and read back.
+    #[test]
+    fn call_layout_and_voice_datagram() {
+        let c = CallRecord {
+            head: MsgHead { flags: crate::CALL_FLAG_END | crate::CALL_FLAG_ENCRYPTED, ..head() },
+            wacn: 0xABCDE,
+            sysid: 0x123,
+            mode: crate::Mode::P25Fdma as u8,
+            slot: CallRecord::NO_SLOT,
+            tg: 100,
+            src: 1_234_567,
+            call: 42,
+            source: 9,
+        };
+        let mut d = Vec::new();
+        c.encode_into(&mut d);
+        assert_eq!(d.len(), CallRecord::BYTES);
+        assert_eq!(d[5], TYP_CC_CALL);
+        assert_eq!((u32le(&d, 32), u16le(&d, 36), d[38], d[39]), (0xABCDE, 0x123, 1, 0xFF));
+        assert_eq!((u32le(&d, 40), u32le(&d, 44), u32le(&d, 48), u32le(&d, 52)), (100, 1_234_567, 42, 9));
+        let back = call_of(&d).unwrap();
+        assert_eq!(back, c);
+        assert!(back.end());
+        // A voice record rides behind it, then the Mac.
+        TsbkRecord { head: head(), tsbk: [0; 12], fec: 0 }.encode_into(&mut d);
+        let signed_len = d.len();
+        MacRecord { head: head(), tag: [7; 32] }.encode_into(&mut d);
+        let (signed, tag) = split_signed(&d).expect("Call … Mac");
+        assert_eq!((signed.len(), tag), (signed_len, [7; 32]));
+        assert!(site_of(signed).is_none(), "a voice datagram has no Site");
     }
 }

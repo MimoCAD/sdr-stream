@@ -44,7 +44,7 @@
 //!
 //! - `typ` — 1 CallHeader · 2 Ldu (P25 Phase 1, [`p25`]) · 3 CallTrailer
 //!   · 4 Ess · 5 P2Vch (P25 Phase 2, [`p25`]) · 6..=10 DMR ([`dmr`])
-//!   · 11..=14 the P25 control channel feed ([`cc`]); others reserved.
+//!   · 11..=15 the live feed ([`cc`]): control channel and voice; others reserved.
 //! - `ver` — 1. A reader refuses any other value the way it refuses a
 //!   cut: the format before this one (magic `MS`, a 24-octet head, a
 //!   one-octet `len/4`) was v0 and was never deployed; there is no v0
@@ -105,10 +105,18 @@ pub const TYP_CC_SITE: u8 = 11;
 pub const TYP_CC_TSBK: u8 = 12;
 pub const TYP_CC_MBT: u8 = 13;
 pub const TYP_CC_MAC: u8 = 14;
+pub const TYP_CC_CALL: u8 = 15;
 
 // Control channel feed flags (bodies in [`cc`]).
 /// Tsbk / Mbt: heard on an uplink — an inbound packet, not an outbound one.
 pub const CC_FLAG_INBOUND: u16 = 1 << 0;
+/// Call: the call's last datagram (its recording closed) — the server
+/// releases the talkgroup to the next keyup.
+pub const CALL_FLAG_END: u16 = 1 << 0;
+/// Call: encrypted, as far as the receiver has confirmed so far.
+pub const CALL_FLAG_ENCRYPTED: u16 = 1 << 1;
+/// Call: an emergency call.
+pub const CALL_FLAG_EMERGENCY: u16 = 1 << 2;
 
 // CallHeader flags.
 /// A sibling `.wav` exists (dual-write acceptance mode).

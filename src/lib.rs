@@ -116,6 +116,12 @@ pub const HDR_FLAG_DUAL_WRITE: u16 = 1 << 0;
 /// tg/src hold a real grant-seeded identity; clear = placeholders, trust
 /// the Link Control inside the frames or the trailer.
 pub const HDR_FLAG_SEEDED: u16 = 1 << 1;
+/// A conventional channel's call (2026-10-03): the trailer's alphatag
+/// is the CHANNEL's name, not the talkgroup's — a simplex keyup names
+/// talkgroup 1 without being the trunked system's talkgroup 1. Files
+/// written before this bit carry 0 (undefined bits write 0), which reads
+/// as what they are.
+pub const HDR_FLAG_CONVENTIONAL: u16 = 1 << 2;
 
 // Ldu flags (bodies in [`p25`]; the bits are registry, so they live here).
 /// This is an LDU2 (else LDU1).
@@ -417,6 +423,11 @@ pub fn pad_to(out: &mut Vec<u8>, target: usize) {
 }
 
 impl CallHeader {
+    /// Recorded on a conventional channel ([`HDR_FLAG_CONVENTIONAL`]).
+    pub fn conventional(&self) -> bool {
+        self.head.flags & HDR_FLAG_CONVENTIONAL != 0
+    }
+
     pub fn encode_into(&self, out: &mut Vec<u8>) {
         let sys = self.system.len().min(255);
         let total = pad8(HEAD_BYTES + 16 + 1 + sys);
@@ -619,6 +630,29 @@ impl Iterator for Records<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The conventional bit: set reads true, every older header (bits 0
+    /// and 1 only) reads false.
+    #[test]
+    fn call_header_conventional_bit() {
+        let mut h = CallHeader {
+            head: MsgHead { flags: HDR_FLAG_SEEDED | HDR_FLAG_DUAL_WRITE, ..Default::default() },
+            mode: Mode::P25Fdma as u8,
+            slot: 0xFF,
+            tg: 1,
+            src: 0,
+            wacn: 0xABCDE,
+            sysid: 0x123,
+            system: "ABCDE123".into(),
+        };
+        assert!(!h.conventional());
+        h.head.flags |= HDR_FLAG_CONVENTIONAL;
+        let mut out = Vec::new();
+        h.encode_into(&mut out);
+        let Some((Record::Header(back), _)) = parse(&out) else { panic!("a header") };
+        assert!(back.conventional());
+        assert_eq!(back.head.flags, HDR_FLAG_SEEDED | HDR_FLAG_DUAL_WRITE | HDR_FLAG_CONVENTIONAL);
+    }
 
     fn head() -> MsgHead {
         MsgHead { seq: 0, epoch_us: 0x1122334455667788, hz: 851_012_500, nac: 0x293, flags: 0, site: 13 }

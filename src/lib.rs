@@ -107,6 +107,7 @@ pub const TYP_CC_MBT: u8 = 13;
 pub const TYP_CC_MAC: u8 = 14;
 pub const TYP_CC_CALL: u8 = 15;
 pub const TYP_P1_VOICE: u8 = 16;
+pub const TYP_P2_VOICE: u8 = 17;
 
 // Control channel feed flags (bodies in [`cc`]).
 /// Tsbk / Mbt: heard on an uplink — an inbound packet, not an outbound one.
@@ -174,6 +175,10 @@ pub const P2V_FLAG_LOC_INFERRED: u16 = 1 << 3;
 pub const P2V_FLAG_MISPLACED: u16 = 1 << 4;
 /// The superframe was closed early (tainted flush or teardown).
 pub const P2V_FLAG_PARTIAL: u16 = 1 << 5;
+/// Live feed only (2026-10-04): this superframe's voice already left,
+/// burst by burst, as [`p25::P2VoiceBurst`] records — a live reader
+/// plays none of it again. Never in an archive.
+pub const P2V_FLAG_LIVE: u16 = 1 << 6;
 
 /// The CallHeader `mode` values. 0 is deliberately invalid so zeroed
 /// memory can never parse as a real header. The filename letter is

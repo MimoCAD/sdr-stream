@@ -31,6 +31,20 @@
 //!                        packing)
 //!  54  2    pad
 //!
+//! P2Voice (typ 17), 184 octets — one Phase 2 voice burst's frames, sent
+//! on the live feed the moment the burst is filed into its superframe
+//! (2026-10-04): a listener waits for a burst, not for the 360 ms
+//! superframe. `head.seq` is its superframe's (the P2Vch record's) seq,
+//! `head.flags` that superframe's P2V_FLAG_DESCRAMBLED; `head.epoch_us`
+//! is the burst's own air time.
+//!  32  1    slot         the LCH (0/1)
+//!  33  1    first        the first frame's place in the superframe (0..17)
+//!  34  1    count        frames carried: 4 (a 4V) or 2 (the 2V)
+//!  35  1    pad
+//!  36  144  phase        `count` frames × 36 symbols, the measured phase
+//!                        (the P2Vch record's encoding); unused frames zero
+//! 180  4    pad
+//!
 //! P2Vch (typ 5), 696 octets:
 //!  32  1    slot         the LCH (0/1)
 //!  33  3    pad
@@ -42,8 +56,8 @@
 //! 691  5    pad
 //! ```
 use crate::{
-    HEAD_BYTES, LDU_FLAG_LDU2, LDU_FLAG_RS_OK, MsgHead, Raw, TYP_LDU, TYP_P1_VOICE, TYP_P2_VCH, pad_to, push_head, u16le,
-    u32le,
+    HEAD_BYTES, LDU_FLAG_LDU2, LDU_FLAG_RS_OK, MsgHead, Raw, TYP_LDU, TYP_P1_VOICE, TYP_P2_VCH, TYP_P2_VOICE, pad_to,
+    push_head, u16le, u32le,
 };
 use alloc::vec::Vec;
 
@@ -142,6 +156,60 @@ impl P1VoiceFrame {
     /// The frame's place in the call: its LDU's seq × 9 + its slot.
     pub fn position(&self) -> u64 {
         self.head.seq as u64 * 9 + self.slot as u64
+    }
+}
+
+/// One Phase 2 voice burst's frames, on their own (the live feed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct P2VoiceBurst {
+    pub head: MsgHead,
+    pub slot: u8,
+    pub first: u8,
+    /// The frames, 4 or 2 of them, measured phase as in [`P2VchFrame`].
+    pub phase: Vec<[u8; 36]>,
+}
+
+impl P2VoiceBurst {
+    /// Wire size of every P2Voice record.
+    pub const BYTES: usize = 184;
+    /// The most frames one burst carries (a 4V).
+    pub const MAX_FRAMES: usize = 4;
+
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        let base = out.len();
+        push_head(out, TYP_P2_VOICE, Self::BYTES, &self.head);
+        let n = self.phase.len().min(Self::MAX_FRAMES);
+        out.extend_from_slice(&[self.slot, self.first, n as u8, 0]);
+        for frame in &self.phase[..n] {
+            out.extend_from_slice(frame);
+        }
+        pad_to(out, base + Self::BYTES);
+    }
+
+    pub fn from_raw(r: &Raw) -> Option<P2VoiceBurst> {
+        const B: usize = HEAD_BYTES;
+        let b = &r.bytes[..];
+        if r.typ != TYP_P2_VOICE || b.len() < Self::BYTES {
+            return None;
+        }
+        let (first, n) = (b[B + 1], b[B + 2] as usize);
+        if n == 0 || n > Self::MAX_FRAMES || first as usize + n > 18 {
+            return None;
+        }
+        let phase = (0..n)
+            .map(|k| {
+                let mut f = [0u8; 36];
+                f.copy_from_slice(&b[B + 4 + 36 * k..B + 4 + 36 * k + 36]);
+                f
+            })
+            .collect();
+        Some(P2VoiceBurst { head: r.head, slot: b[B], first, phase })
+    }
+
+    /// The first frame's place in the call: its superframe's seq × 18 +
+    /// its place in the superframe.
+    pub fn position(&self) -> u64 {
+        self.head.seq as u64 * 18 + self.first as u64
     }
 }
 
@@ -263,6 +331,27 @@ mod tests {
         // A slot past the LDU's nine never parses.
         out[32] = 9;
         assert!(P1VoiceFrame::from_raw(&raw(&out)).is_none());
+    }
+
+    #[test]
+    fn p2_voice_layout_pinned() {
+        let phase = alloc::vec![[0x11u8; 36], [0x22; 36]];
+        let f = P2VoiceBurst { head: MsgHead { seq: 9, flags: crate::P2V_FLAG_DESCRAMBLED, ..head() }, slot: 1, first: 16, phase };
+        let mut out = Vec::new();
+        f.encode_into(&mut out);
+        assert_eq!(out.len(), P2VoiceBurst::BYTES);
+        assert_eq!(out[5], TYP_P2_VOICE);
+        assert_eq!(u16le(&out, 6), 184);
+        assert_eq!(&out[32..36], &[1, 16, 2, 0]);
+        assert_eq!(&out[36..72], &[0x11; 36]);
+        assert_eq!(&out[72..108], &[0x22; 36]);
+        assert!(out[108..].iter().all(|&b| b == 0));
+        let back = P2VoiceBurst::from_raw(&raw(&out)).unwrap();
+        assert_eq!(back, f);
+        assert_eq!(back.position(), 9 * 18 + 16);
+        // A burst running past the superframe's 18 frames never parses.
+        out[33] = 17;
+        assert!(P2VoiceBurst::from_raw(&raw(&out)).is_none());
     }
 
     #[test]
